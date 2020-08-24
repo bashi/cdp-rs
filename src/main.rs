@@ -1,7 +1,10 @@
 use smol::Task;
 use structopt::StructOpt;
 
+mod cli;
 pub mod endpoints;
+
+use endpoints::Endpoints;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -20,25 +23,10 @@ type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 fn main() -> Result<(), Error> {
     let opt = Opt::from_args();
 
-    let endpoints = endpoints::Endpoints::new(&opt.host, opt.port);
+    let endpoints = Endpoints::new(&opt.host, opt.port);
 
     smol::run(async move {
-        let task = Task::spawn(endpoints.clone().version());
-        let res = task.await?;
-        println!("{:#?}", res);
-
-        let task = Task::spawn(endpoints.clone().target_list());
-        let res = task.await?;
-        println!("{:#?}", res);
-
-        let task = Task::spawn(endpoints.clone().open_new_tab("https://www.example.com"));
-        let target = task.await?;
-        println!("{:#?}", target);
-
-        let task = Task::spawn(endpoints.clone().close(target.id.clone()));
-        let target = task.await?;
-        println!("{:#?}", target);
-
+        Task::spawn(cli::run(endpoints)).await?;
         Ok(())
     })
 }
