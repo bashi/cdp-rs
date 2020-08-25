@@ -1,8 +1,10 @@
+use async_channel::bounded;
 use smol::Task;
 use structopt::StructOpt;
 
 mod cli;
 pub mod endpoints;
+mod websocket_target;
 
 use endpoints::Endpoints;
 
@@ -26,7 +28,9 @@ fn main() -> Result<(), Error> {
     let endpoints = Endpoints::new(&opt.host, opt.port);
 
     smol::run(async move {
-        Task::spawn(cli::run(endpoints)).await?;
+        let (sender, receiver) = bounded(100);
+        Task::spawn(cli::execute_command(endpoints, receiver)).detach();
+        Task::spawn(cli::run_repl(sender)).await?;
         Ok(())
     })
 }

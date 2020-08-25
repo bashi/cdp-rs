@@ -8,13 +8,12 @@ type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 const MAX_HEADERS: usize = 64;
 const MAX_HEADER_LEN: usize = 8192;
 
-async fn endpoint_response(stream: &TcpStream) -> Result<Vec<u8>, Error> {
-    let mut reader = io::BufReader::new(stream);
-
-    // Read http header
-    let mut buf = Vec::new();
+pub(crate) async fn read_header(
+    reader: &mut io::BufReader<&TcpStream>,
+    buf: &mut Vec<u8>,
+) -> Result<(), Error> {
     loop {
-        let n = reader.read_until(b'\n', &mut buf).await?;
+        let n = reader.read_until(b'\n', buf).await?;
         if n == 0 {
             return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
         }
@@ -28,6 +27,15 @@ async fn endpoint_response(stream: &TcpStream) -> Result<Vec<u8>, Error> {
             return Err(format!("Header too large").into());
         }
     }
+    Ok(())
+}
+
+async fn endpoint_response(stream: &TcpStream) -> Result<Vec<u8>, Error> {
+    let mut reader = io::BufReader::new(stream);
+
+    // Read http header
+    let mut buf = Vec::new();
+    read_header(&mut reader, &mut buf).await?;
 
     // Parse
     let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
@@ -71,6 +79,23 @@ async fn endpoint_response(stream: &TcpStream) -> Result<Vec<u8>, Error> {
     reader.read_exact(&mut buf).await?;
 
     Ok(buf)
+}
+
+async fn send_request(endpoints: Endpoints, path: &str) -> Result<Vec<u8>, Error> {
+    let mut stream = TcpStream::connect(&format!("{}:{}", endpoints.host, endpoints.port)).await?;
+    let path = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, endpoints.host
+    );
+    stream.write_all(path.as_bytes()).await?;
+    let content = endpoint_response(&stream).await?;
+    Ok(content)
+}
+
+async fn version(endpoints: Endpoints) -> Result<BrowserVersionMetadata, Error> {
+    let content = send_request(endpoints, "/json/version").await?;
+    let version: BrowserVersionMetadata = serde_json::from_slice(&content)?;
+    Ok(version)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -129,10 +154,8 @@ impl Endpoints {
         Ok(content)
     }
 
-    pub async fn version(self) -> Result<BrowserVersionMetadata, Error> {
-        let content = self.send_request("/json/version").await?;
-        let version: BrowserVersionMetadata = serde_json::from_slice(&content)?;
-        Ok(version)
+    pub fn version(&self) -> impl Future<Output = Result<BrowserVersionMetadata, Error>> {
+        version(self.clone())
     }
 
     pub async fn target_list(self) -> Result<Vec<TargetItem>, Error> {
