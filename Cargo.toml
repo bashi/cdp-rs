@@ -1,20 +1,21 @@
 [package]
-name = "cdp-cli"
+name = "cdp-rs"
 version = "0.1.0"
-authors = ["Kenichi Ishibashi <ishibashi.kenichi@gmail.com>"]
+authors = ["Kenichi Ishibashi"]
 edition = "2018"
+licence = "Apache-2.0"
 
 [dependencies]
-async-net = "0.1.1"
-smol = "0.3"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-url = "2.1.1"
-httparse = "1.3.4"
-structopt = "0.3"
-rustyline = "6.2.0"
 async-channel = "1.4.0"
-rand = "0.7.3"
+async-net = "0.1.1"
 base64 = "0.12.3"
 futures = "0.3.5"
+httparse = "1.3.4"
+rand = "0.7.3"
+rustyline = "6.2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 sha-1 = "0.9.1"
+smol = "0.3"
+structopt = "0.3"
+url = "2.1.1"
