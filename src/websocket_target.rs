@@ -61,7 +61,6 @@ async fn connect(url: Url) -> Result<WebSocketTarget, Error> {
     let mut reader = io::BufReader::new(&stream);
     read_header(&mut reader, &mut buf).await?;
 
-    // TODO: Verify `Sec-WebSocket-Accept`.
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut response = httparse::Response::new(&mut headers);
     match response.parse(&buf)? {
@@ -75,9 +74,35 @@ async fn connect(url: Url) -> Result<WebSocketTarget, Error> {
         return Err(format!("Response != 101").into());
     }
 
+    // Verify `Sec-WebSocket-Accept`
+    for header in response.headers {
+        match header.name {
+            "Sec-WebSocket-Accept" => {
+                check_sec_websocket_accept(&key, header.value)?;
+            }
+            _ => (),
+        }
+    }
+
     let method_id = 0;
     let target = WebSocketTarget { stream, method_id };
     Ok(target)
+}
+
+fn check_sec_websocket_accept(key: &str, accept_value: &[u8]) -> Result<(), Error> {
+    use sha1::{Digest, Sha1};
+    const ACCEPT_SUFFIX: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    let accept = format!("{}{}", key, ACCEPT_SUFFIX);
+    let mut hasher = Sha1::new();
+    hasher.update(accept.as_bytes());
+    let hashed = hasher.finalize();
+    let encoded = base64::encode(hashed.as_slice());
+    if accept_value == encoded.as_bytes() {
+        Ok(())
+    } else {
+        println!("{:?} != {:?}", accept_value, hashed.as_slice());
+        Err(format!("Invalid Sec-WebSocket-Accept: {:?}", accept_value).into())
+    }
 }
 
 async fn receive_frames(stream: TcpStream) -> Result<(), Error> {
