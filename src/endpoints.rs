@@ -81,21 +81,15 @@ async fn endpoint_response(stream: &TcpStream) -> Result<Vec<u8>, Error> {
     Ok(buf)
 }
 
-async fn send_request(endpoints: Endpoints, path: &str) -> Result<Vec<u8>, Error> {
-    let mut stream = TcpStream::connect(&format!("{}:{}", endpoints.host, endpoints.port)).await?;
+async fn send_request(host: &str, port: u16, path: &str) -> Result<Vec<u8>, Error> {
+    let mut stream = TcpStream::connect(&format!("{}:{}", host, port)).await?;
     let path = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        path, endpoints.host
+        path, host
     );
     stream.write_all(path.as_bytes()).await?;
     let content = endpoint_response(&stream).await?;
     Ok(content)
-}
-
-async fn version(endpoints: Endpoints) -> Result<BrowserVersionMetadata, Error> {
-    let content = send_request(endpoints, "/json/version").await?;
-    let version: BrowserVersionMetadata = serde_json::from_slice(&content)?;
-    Ok(version)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -143,43 +137,57 @@ impl Endpoints {
         Endpoints { host, port }
     }
 
-    async fn send_request(self, path: &str) -> Result<Vec<u8>, Error> {
-        let mut stream = TcpStream::connect(&format!("{}:{}", self.host, self.port)).await?;
-        let path = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            path, self.host
-        );
-        stream.write_all(path.as_bytes()).await?;
-        let content = endpoint_response(&stream).await?;
-        Ok(content)
-    }
-
     pub fn version(&self) -> impl Future<Output = Result<BrowserVersionMetadata, Error>> {
-        version(self.clone())
+        let host = self.host.clone();
+        let port = self.port;
+        async move {
+            let content = send_request(&host, port, "/json/version").await?;
+            let version: BrowserVersionMetadata = serde_json::from_slice(&content)?;
+            Ok(version)
+        }
     }
 
-    pub async fn target_list(self) -> Result<Vec<TargetItem>, Error> {
-        let content = self.send_request("/json/list").await?;
-        let targets: Vec<TargetItem> = serde_json::from_slice(&content)?;
-        Ok(targets)
+    pub fn target_list(&self) -> impl Future<Output = Result<Vec<TargetItem>, Error>> {
+        let host = self.host.clone();
+        let port = self.port;
+        async move {
+            let content = send_request(&host, port, "/json/list").await?;
+            let targets: Vec<TargetItem> = serde_json::from_slice(&content)?;
+            Ok(targets)
+        }
     }
 
-    pub async fn open_new_tab(self, url: impl AsRef<str>) -> Result<TargetItem, Error> {
+    pub fn open_new_tab(
+        &self,
+        url: impl AsRef<str>,
+    ) -> impl Future<Output = Result<TargetItem, Error>> {
         let path = format!("/json/new?{}", url.as_ref());
-        let content = self.send_request(&path).await?;
-        let target: TargetItem = serde_json::from_slice(&content)?;
-        Ok(target)
+        let host = self.host.clone();
+        let port = self.port;
+        async move {
+            let content = send_request(&host, port, &path).await?;
+            let target: TargetItem = serde_json::from_slice(&content)?;
+            Ok(target)
+        }
     }
 
-    pub async fn activate(self, target_id: TargetId) -> Result<(), Error> {
+    pub fn activate(&self, target_id: TargetId) -> impl Future<Output = Result<(), Error>> {
         let path = format!("/json/activate/{}", target_id.0);
-        let _content = self.send_request(&path).await?;
-        Ok(())
+        let host = self.host.clone();
+        let port = self.port;
+        async move {
+            let _content = send_request(&host, port, &path).await?;
+            Ok(())
+        }
     }
 
-    pub async fn close(self, target_id: TargetId) -> Result<(), Error> {
-        let path = format!("/json/close/{}", target_id.0);
-        let _content = self.send_request(&path).await?;
-        Ok(())
+    pub fn close(&self, target_id: TargetId) -> impl Future<Output = Result<(), Error>> {
+        let path = format!("/json/activate/{}", target_id.0);
+        let host = self.host.clone();
+        let port = self.port;
+        async move {
+            let _content = send_request(&host, port, &path).await?;
+            Ok(())
+        }
     }
 }

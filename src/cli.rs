@@ -115,12 +115,12 @@ pub(crate) async fn execute_command(
 
     // Tentative
     const NEWTAB_URL: &'static str = "chrome://newtab/";
-    let targets = endpoints.clone().target_list().await?;
+    let targets = endpoints.target_list().await?;
     let newtab = targets.into_iter().find(|t| t.url == NEWTAB_URL);
     let target_url = match newtab {
         Some(newtab) => newtab.websocket_debugger_url,
         None => {
-            let newtab = endpoints.clone().open_new_tab(NEWTAB_URL).await?;
+            let newtab = endpoints.open_new_tab(NEWTAB_URL).await?;
             newtab.websocket_debugger_url
         }
     };
@@ -136,7 +136,6 @@ pub(crate) async fn execute_command(
             }
         };
 
-        let endpoints = endpoints.clone();
         match command {
             Command::Version => {
                 let res = endpoints.version().await?;
