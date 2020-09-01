@@ -3,7 +3,7 @@ name = "cdp-rs"
 version = "0.1.0"
 authors = ["Kenichi Ishibashi"]
 edition = "2018"
-licence = "Apache-2.0"
+license = "Apache-2.0"
 
 [dependencies]
 async-channel = "1.4.0"

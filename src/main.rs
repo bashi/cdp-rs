@@ -1,12 +1,9 @@
-use async_channel::bounded;
-use smol::Task;
 use structopt::StructOpt;
 
 mod cli;
-pub mod endpoints;
+mod endpoints;
+mod websocket;
 mod websocket_target;
-
-use endpoints::Endpoints;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -24,13 +21,5 @@ type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 fn main() -> Result<(), Error> {
     let opt = Opt::from_args();
-
-    let endpoints = Endpoints::new(&opt.host, opt.port);
-
-    smol::run(async move {
-        let (sender, receiver) = bounded(100);
-        Task::spawn(cli::execute_command(endpoints, receiver)).detach();
-        Task::spawn(cli::run_repl(sender)).await?;
-        Ok(())
-    })
+    smol::run(cli::run_repl(opt))
 }

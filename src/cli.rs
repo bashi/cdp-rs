@@ -1,78 +1,59 @@
-use async_channel::{Receiver, Sender};
-
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
-use super::Error;
 use crate::endpoints::Endpoints;
-use crate::websocket_target::WebSocketTarget;
+use crate::websocket_target::{MethodCall, WebSocketTarget};
+use crate::{Error, Opt};
+
+pub(crate) async fn run_repl(opt: Opt) -> Result<(), Error> {
+    let endpoints = Endpoints::new(&opt.host, opt.port).await?;
+
+    // Tentative: Create a new tab if not exists, then set it as the initial target.
+    const NEWTAB_URL: &'static str = "chrome://newtab/";
+    let targets = endpoints.target_list().await?;
+    let newtab = targets.into_iter().find(|t| t.url == NEWTAB_URL);
+    let target_url = match newtab {
+        Some(newtab) => newtab.websocket_debugger_url,
+        None => {
+            let newtab = endpoints.open_new_tab(NEWTAB_URL).await?;
+            newtab.websocket_debugger_url
+        }
+    };
+    let target_url = url::Url::parse(&target_url)?;
+    let mut target = WebSocketTarget::connect(target_url).await?;
+
+    let mut rl = Editor::<()>::new();
+    loop {
+        let readline = rl.readline("cdp> ");
+        match readline {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str());
+                match parse_command_line(&line) {
+                    Some(command) => execute_command(command, &endpoints, &mut target).await?,
+                    None => (),
+                }
+            }
+            Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
+                break;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
+            }
+        }
+    }
+    Ok(())
+}
 
 enum Command {
     Version,
     List,
     NewTab(String),
-    ConnectWebSocketTarget(String),
+    ConnectTarget(String),
+    ActivateTarget(String),
+    CloseTarget(String),
     MethodCall(MethodCall),
     Unknown(String),
-}
-
-#[derive(Debug)]
-pub(crate) struct MethodCall {
-    domain: String,
-    name: String,
-    params: serde_json::Value,
-}
-
-impl MethodCall {
-    pub(crate) fn serialize(&self, id: usize) -> String {
-        let msg = serde_json::json!({
-            "id": id,
-            "method": format!("{}.{}", self.domain, self.name),
-            "params": self.params,
-        });
-        msg.to_string()
-    }
-}
-
-fn parse_method_call(line: &str) -> Option<MethodCall> {
-    // Tentative
-    let bytes = line.as_bytes();
-    let dot = match bytes.iter().position(|b| *b == b'.') {
-        Some(pos) => pos,
-        None => return None,
-    };
-
-    let remaining = &bytes[dot..];
-    let lparen = match remaining.iter().position(|b| *b == b'(') {
-        Some(pos) => dot + pos,
-        None => return None,
-    };
-
-    let remaining = &bytes[lparen..];
-    let offset = bytes.len() - lparen;
-    let rparen = match remaining.iter().rev().position(|b| *b == b')') {
-        Some(pos) => lparen + (offset - pos) - 1,
-        None => return None,
-    };
-
-    let domain = unsafe { String::from_utf8_unchecked(bytes[..dot].to_vec()) };
-    let name = unsafe { String::from_utf8_unchecked(bytes[dot + 1..lparen].to_vec()) };
-
-    let params_bytes = &bytes[lparen + 1..rparen];
-    let params = if params_bytes.len() == 0 {
-        serde_json::from_str("{}").unwrap()
-    } else {
-        match serde_json::from_slice(params_bytes) {
-            Ok(params) => params,
-            Err(_) => return None,
-        }
-    };
-
-    Some(MethodCall {
-        domain,
-        name,
-        params,
-    })
 }
 
 fn parse_command_line(line: &str) -> Option<Command> {
@@ -94,99 +75,65 @@ fn parse_command_line(line: &str) -> Option<Command> {
         return Some(Command::NewTab(url));
     }
 
-    const CONNECT_WEBSOCKET_TARGET_COMMAND: &str = "connect ";
-    if line.starts_with(CONNECT_WEBSOCKET_TARGET_COMMAND) {
-        let url = line[CONNECT_WEBSOCKET_TARGET_COMMAND.len()..].to_string();
-        return Some(Command::ConnectWebSocketTarget(url));
+    const CONNECT_TARGET_COMMAND: &str = "connect ";
+    if line.starts_with(CONNECT_TARGET_COMMAND) {
+        let url = line[CONNECT_TARGET_COMMAND.len()..].to_string();
+        return Some(Command::ConnectTarget(url));
     }
 
-    if let Some(msg) = parse_method_call(line) {
+    const ACTIVATE_TARGET_COMMAND: &str = "activate ";
+    if line.starts_with(ACTIVATE_TARGET_COMMAND) {
+        let target_id = line[ACTIVATE_TARGET_COMMAND.len()..].to_string();
+        return Some(Command::ActivateTarget(target_id));
+    }
+
+    const CLOSE_TARGET_COMMAND: &str = "close ";
+    if line.starts_with(CLOSE_TARGET_COMMAND) {
+        let target_id = line[CLOSE_TARGET_COMMAND.len()..].to_string();
+        return Some(Command::CloseTarget(target_id));
+    }
+
+    if let Some(msg) = MethodCall::from_str(line) {
         return Some(Command::MethodCall(msg));
     }
 
     Some(Command::Unknown(line.to_owned()))
 }
 
-pub(crate) async fn execute_command(
-    endpoints: Endpoints,
-    lines: Receiver<String>,
+async fn execute_command(
+    command: Command,
+    endpoints: &Endpoints,
+    target: &mut WebSocketTarget,
 ) -> Result<(), Error> {
-    endpoints.version().await?;
-
-    // Tentative
-    const NEWTAB_URL: &'static str = "chrome://newtab/";
-    let targets = endpoints.target_list().await?;
-    let newtab = targets.into_iter().find(|t| t.url == NEWTAB_URL);
-    let target_url = match newtab {
-        Some(newtab) => newtab.websocket_debugger_url,
-        None => {
-            let newtab = endpoints.open_new_tab(NEWTAB_URL).await?;
-            newtab.websocket_debugger_url
+    match command {
+        Command::Version => {
+            let res = endpoints.version().await?;
+            println!("{:#?}", res);
         }
-    };
-    let target_url = url::Url::parse(&target_url)?;
-    let mut target = WebSocketTarget::connect(target_url).await?;
-    smol::Task::spawn(target.receive_frames()).detach();
-
-    while let Ok(line) = lines.recv().await {
-        let command = match parse_command_line(line.as_str()) {
-            Some(command) => command,
-            None => {
-                continue;
-            }
-        };
-
-        match command {
-            Command::Version => {
-                let res = endpoints.version().await?;
-                println!("{:#?}", res);
-            }
-            Command::List => {
-                let res = endpoints.target_list().await?;
-                println!("{:#?}", res);
-            }
-            Command::NewTab(url) => {
-                let res = endpoints.open_new_tab(url).await?;
-                println!("{:#?}", res);
-            }
-            Command::ConnectWebSocketTarget(url) => {
-                let url = url::Url::parse(url.as_str())?;
-                WebSocketTarget::connect(url).await?;
-            }
-            Command::MethodCall(method) => {
-                println!("{:?}", method);
-                target.call_method(&method).await?;
-            }
-            Command::Unknown(line) => {
-                println!("Unknown command: {}", line);
-            }
+        Command::List => {
+            let res = endpoints.target_list().await?;
+            println!("{:#?}", res);
         }
-    }
-
-    Ok(())
-}
-
-pub(crate) async fn run_repl(sender: Sender<String>) -> Result<(), Error> {
-    let mut rl = Editor::<()>::new();
-    loop {
-        let readline = rl.readline("cdp> ");
-        match readline {
-            Ok(line) => {
-                rl.add_history_entry(line.as_str());
-                sender.send(line).await?;
-            }
-            Err(ReadlineError::Interrupted) => {
-                // println!("Ctrl-C");
-                break;
-            }
-            Err(ReadlineError::Eof) => {
-                // println!("Ctrl-D");
-                break;
-            }
-            Err(err) => {
-                println!("Error: {:?}", err);
-                break;
-            }
+        Command::NewTab(url) => {
+            let res = endpoints.open_new_tab(url).await?;
+            println!("{:#?}", res);
+        }
+        Command::ConnectTarget(url) => {
+            let url = url::Url::parse(url.as_str())?;
+            *target = WebSocketTarget::connect(url).await?;
+        }
+        Command::ActivateTarget(target_id) => {
+            endpoints.activate(target_id).await?;
+        }
+        Command::CloseTarget(target_id) => {
+            endpoints.close(target_id).await?;
+        }
+        Command::MethodCall(method) => {
+            println!("{:?}", method);
+            target.call_method(&method).await?;
+        }
+        Command::Unknown(line) => {
+            println!("Unknown command: {}", line);
         }
     }
     Ok(())
