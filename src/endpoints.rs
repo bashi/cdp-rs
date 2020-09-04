@@ -37,7 +37,7 @@ pub struct BrowserVersionMetadata {
 const MAX_HEADERS: usize = 64;
 const MAX_HEADER_LEN: usize = 8192;
 
-pub(crate) async fn read_header(
+pub(crate) async fn read_raw_header(
     reader: &mut io::BufReader<&TcpStream>,
     buf: &mut Vec<u8>,
 ) -> Result<(), Error> {
@@ -64,7 +64,7 @@ async fn endpoint_response(stream: &TcpStream) -> Result<Vec<u8>, Error> {
 
     // Read http header
     let mut buf = Vec::new();
-    read_header(&mut reader, &mut buf).await?;
+    read_raw_header(&mut reader, &mut buf).await?;
 
     // Parse
     let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];

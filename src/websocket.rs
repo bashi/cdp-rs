@@ -4,7 +4,7 @@ use smol::io;
 use smol::prelude::*;
 use url::Url;
 
-use crate::endpoints::read_header;
+use crate::endpoints::read_raw_header;
 use crate::Error;
 
 #[derive(Debug, Copy, Clone)]
@@ -32,12 +32,18 @@ impl Opcode {
 }
 
 #[derive(Debug)]
-pub(crate) struct WebSocketFrame {
+pub(crate) struct FrameHeader {
     pub(crate) fin: bool,
     pub(crate) opcode: Opcode,
     pub(crate) mask: bool,
     pub(crate) payload_len: usize,
     pub(crate) masking_key: Option<[u8; 4]>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Frame {
+    pub(crate) header: FrameHeader,
+    pub(crate) payload: Vec<u8>,
 }
 
 pub(crate) struct Sender {
@@ -64,8 +70,8 @@ impl Receiver {
         Receiver { reader }
     }
 
-    pub(crate) async fn receive_frame(&mut self) -> Result<(WebSocketFrame, Vec<u8>), Error> {
-        receive_single_frame(&mut self.reader).await
+    pub(crate) async fn receive_frame(&mut self) -> Result<Frame, Error> {
+        receive_frame(&mut self.reader).await
     }
 }
 
@@ -101,7 +107,7 @@ async fn connect_stream(url: Url) -> Result<TcpStream, Error> {
     // Read header
     let mut buf = Vec::new();
     let mut reader = io::BufReader::new(&stream);
-    read_header(&mut reader, &mut buf).await?;
+    read_raw_header(&mut reader, &mut buf).await?;
 
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut response = httparse::Response::new(&mut headers);
@@ -145,18 +151,16 @@ fn check_sec_websocket_accept(key: &str, accept_value: &[u8]) -> Result<(), Erro
     }
 }
 
-async fn receive_single_frame(
-    reader: &mut io::BufReader<TcpStream>,
-) -> Result<(WebSocketFrame, Vec<u8>), Error> {
-    let frame = read_single_frame(reader).await?;
-    if frame.mask {
+async fn receive_frame(reader: &mut io::BufReader<TcpStream>) -> Result<Frame, Error> {
+    let header = read_header(reader).await?;
+    if header.mask {
         return Err(format!("Frame should not be masked").into());
     }
 
-    let mut payload = vec![0; frame.payload_len];
+    let mut payload = vec![0; header.payload_len];
     reader.read_exact(&mut payload).await?;
 
-    Ok((frame, payload))
+    Ok(Frame { header, payload })
 }
 
 async fn send_text_frame(mut stream: TcpStream, text: String) -> Result<(), Error> {
@@ -168,7 +172,7 @@ async fn send_text_frame(mut stream: TcpStream, text: String) -> Result<(), Erro
         payload[i] = data[i] ^ masking_key[i % 4];
     }
 
-    let frame = WebSocketFrame {
+    let header = FrameHeader {
         fin: true,
         opcode: Opcode::TextFrame,
         mask: true,
@@ -176,18 +180,18 @@ async fn send_text_frame(mut stream: TcpStream, text: String) -> Result<(), Erro
         masking_key: Some(masking_key),
     };
 
-    write_single_frame(&mut stream, &frame).await?;
+    write_header(&mut stream, &header).await?;
     stream.write_all(&payload).await?;
 
     Ok(())
 }
 
-async fn write_single_frame(stream: &mut TcpStream, frame: &WebSocketFrame) -> Result<(), Error> {
+async fn write_header(stream: &mut TcpStream, header: &FrameHeader) -> Result<(), Error> {
     let mut buf = [0; 10];
-    buf[0] = ((frame.fin as u8) << 7) | frame.opcode as u8;
-    buf[1] = (frame.mask as u8) << 7;
+    buf[0] = ((header.fin as u8) << 7) | header.opcode as u8;
+    buf[1] = (header.mask as u8) << 7;
 
-    let len = frame.payload_len;
+    let len = header.payload_len;
     let size = if len <= 125 {
         buf[1] |= len as u8;
         2
@@ -210,14 +214,14 @@ async fn write_single_frame(stream: &mut TcpStream, frame: &WebSocketFrame) -> R
     };
 
     stream.write_all(&buf[..size]).await?;
-    if let Some(masking_key) = frame.masking_key.as_ref() {
+    if let Some(masking_key) = header.masking_key.as_ref() {
         stream.write_all(masking_key).await?;
     }
 
     Ok(())
 }
 
-async fn read_single_frame(reader: &mut io::BufReader<TcpStream>) -> Result<WebSocketFrame, Error> {
+async fn read_header(reader: &mut io::BufReader<TcpStream>) -> Result<FrameHeader, Error> {
     let mut first_two = [0; 2];
     reader.read_exact(&mut first_two).await?;
     let fin = first_two[0] & 0x80 == 0x80;
@@ -253,7 +257,7 @@ async fn read_single_frame(reader: &mut io::BufReader<TcpStream>) -> Result<WebS
         masking_key = Some(buf);
     }
 
-    Ok(WebSocketFrame {
+    Ok(FrameHeader {
         fin,
         opcode,
         mask,

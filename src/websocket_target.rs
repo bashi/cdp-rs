@@ -97,11 +97,10 @@ impl WebSocketTarget {
 async fn receive_frames(mut receiver: websocket::Receiver) -> Result<(), Error> {
     // TODO: Make receiver implement Stream.
     loop {
-        // Read a single frame
-        let (frame, payload) = receiver.receive_frame().await?;
-        assert!(frame.fin, "Fragmented frames aren't supported.");
+        let frame = receiver.receive_frame().await?;
+        assert!(frame.header.fin, "Fragmented frames aren't supported.");
 
-        let value: serde_json::Value = serde_json::from_slice(&payload)?;
+        let value: serde_json::Value = serde_json::from_slice(&frame.payload)?;
         let res = serde_json::to_string_pretty(&value)?;
         println!("{}", res);
     }
