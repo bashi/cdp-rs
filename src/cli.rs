@@ -23,6 +23,8 @@ pub(crate) async fn run_repl(opt: Opt) -> Result<(), Error> {
     let mut target = WebSocketTarget::connect(target_url).await?;
 
     let mut rl = Editor::<()>::new();
+
+    let _ = rl.load_history("history.txt"); // Ignore error
     loop {
         let readline = rl.readline("cdp> ");
         match readline {
@@ -42,6 +44,7 @@ pub(crate) async fn run_repl(opt: Opt) -> Result<(), Error> {
             }
         }
     }
+    rl.save_history("history.txt")?;
     Ok(())
 }
 

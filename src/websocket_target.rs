@@ -95,13 +95,29 @@ impl WebSocketTarget {
 }
 
 async fn receive_frames(mut receiver: websocket::Receiver) -> Result<(), Error> {
+    use colored_json::prelude::*;
+
+    // Tentative: Open a file to log events.
+    use async_std::fs::File;
+    let mut events = File::create("events.log").await?;
+
     // TODO: Make receiver implement Stream.
     loop {
         let frame = receiver.receive_frame().await?;
         assert!(frame.header.fin, "Fragmented frames aren't supported.");
 
         let value: serde_json::Value = serde_json::from_slice(&frame.payload)?;
-        let res = serde_json::to_string_pretty(&value)?;
-        println!("{}", res);
+        if let Some(ref _msg_id) = value.get("id") {
+            // This is a reply for a method call.
+            let res = serde_json::to_string_pretty(&value)?;
+            println!("{}", res.to_colored_json_auto()?);
+        } else {
+            // This is an event coming from DevTools.
+            let res = serde_json::to_string_pretty(&value)?;
+            let res = res.to_colored_json_auto()?;
+            events.write_all(res.as_bytes()).await?;
+            events.write_all(b"\n").await?;
+            events.sync_all().await?;
+        }
     }
 }
